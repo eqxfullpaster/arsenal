@@ -1,381 +1,206 @@
 local Players = game:GetService("Players")
 local TeleportService = game:GetService("TeleportService")
 local HttpService = game:GetService("HttpService")
-local StarterPlayer = game:GetService("StarterPlayer")
+local RunService = game:GetService("RunService")
 local VirtualInputManager = game:GetService("VirtualInputManager")
 local player = Players.LocalPlayer
 
--- =========================================================================
--- CONFIG
--- =========================================================================
-local CONFIG = {
-    targetRarities = { Mythical = true, Secret = true },
-    serverHopDelay = 3,
-    captureTimeout = 15,
-    clickDelay = 0.105,
-}
+local ImGui = loadstring(game:HttpGet("https://raw.githubusercontent.com/depthso/Roblox-ImGUI/main/ImGui.lua"))()
 
--- =========================================================================
--- ESTADO
--- =========================================================================
+local RARITIES = { Mythical = true, Secret = true, Exclusive = true }
 local STATE = {
-    running = true,
+    running = false,
     capturing = false,
-    foundTarget = false,
+    clicking = false,
     capturedCount = 0,
 }
 
--- =========================================================================
--- MODULOS
--- =========================================================================
-local throwLassoModule = nil
-pcall(function()
-    throwLassoModule = require(player.PlayerScripts.Controllers.UI.lassoUI.throwLasso)
-end)
-
-local MinigameModule = nil
-pcall(function()
-    MinigameModule = require(StarterPlayer.StarterPlayerScripts.Controllers.UI.lassoUI.lassoMinigameUI)
-end)
-
--- =========================================================================
--- UTILS
--- =========================================================================
-local function log(msg, color)
+local function log(msg)
     print(string.format("[%s] %s", os.date("%H:%M:%S"), msg))
 end
 
-local function getChar() return player.Character end
-local function getHRP() local c = getChar() return c and c:FindFirstChild("HumanoidRootPart") end
-
-local function getAnimalPos(m)
-    if not m or not m.Parent then return nil end
-    if m:IsA("Model") and m.PrimaryPart then return m.PrimaryPart.Position end
-    local p = m:FindFirstChild("HumanoidRootPart") or m:FindFirstChild("Root") or m:FindFirstChild("Torso")
-    return p and p.Position
-end
-
-local function isAlive(inst) return inst and inst.Parent and getAnimalPos(inst) ~= nil end
-
--- =========================================================================
--- SERVER HOP
--- =========================================================================
 local function serverHop()
-    log("🔄 Procurando novo servidor...", "cyan")
-    
+    log("Procurando novo servidor...")
+    local currentJobId = game.JobId
     local success, servers = pcall(function()
-        return HttpService:JSONDecode(game:HttpGet(
-            "https://games.roblox.com/v1/games/" .. game.PlaceId .. "/servers/Public?sortOrder=Asc&limit=100"
-        ))
+        return HttpService:JSONDecode(game:HttpGet("https://games.roblox.com/v1/games/" .. game.PlaceId .. "/servers/Public?sortOrder=Asc&limit=100"))
     end)
-    
     if not success or not servers or not servers.data then
-        log("❌ Erro ao buscar servidores, tentando novamente...", "red")
-        task.wait(5)
+        log("Erro ao buscar servidores, tentando qualquer um...")
+        task.wait(3)
         TeleportService:Teleport(game.PlaceId, player)
         return
     end
-    
     local validServers = {}
     for _, server in ipairs(servers.data) do
-        if server.id ~= game.JobId and server.playing < server.maxPlayers - 5 then
+        if server.id ~= currentJobId and server.playing < server.maxPlayers - 5 then
             table.insert(validServers, server.id)
         end
     end
-    
     if #validServers > 0 then
         local targetServer = validServers[math.random(1, #validServers)]
-        log("✅ Servidor encontrado! Teleportando...", "green")
+        log("Servidor encontrado! Teleportando...")
         TeleportService:TeleportToPlaceInstance(game.PlaceId, targetServer, player)
     else
-        log("⚠️ Nenhum servidor disponível, tentando qualquer um...", "yellow")
+        log("Nenhum servidor disponivel, tentando qualquer um...")
         TeleportService:Teleport(game.PlaceId, player)
     end
 end
 
--- =========================================================================
--- SCAN
--- =========================================================================
-local function scanTargets()
-    local targets = {}
-    
-    local function proc(folder)
-        if not folder then return end
-        for _, pet in ipairs(folder:GetChildren()) do
-            if pet:IsA("Model") and pet.Parent then
-                local rar = pet:GetAttribute("Rarity")
-                if CONFIG.targetRarities[rar] then
-                    local pos = getAnimalPos(pet)
-                    if pos then
-                        local hrp = getHRP()
-                        local dist = hrp and (pos - hrp.Position).Magnitude or 99999
-                        table.insert(targets, {
-                            instance = pet,
-                            rarity = rar,
-                            name = pet.Name,
-                            position = pos,
-                            distance = dist
-                        })
-                    end
-                end
-            end
+local function GetPetByRarity()
+    for _, v in workspace.RoamingPets.Pets:GetChildren() do
+        if v:IsA("Model") and RARITIES[v:GetAttribute("Rarity")] then
+            return v
         end
     end
-    
-    local r = workspace:FindFirstChild("RoamingPets")
-    if r then proc(r:FindFirstChild("Pets")) end
-    local i = workspace:FindFirstChild("IceIslandPets")
-    if i then proc(i:FindFirstChild("Pets")) end
-    
-    table.sort(targets, function(a, b) return a.distance < b.distance end)
-    return targets
 end
 
--- =========================================================================
--- TELEPORTE
--- =========================================================================
-local function teleportTo(pos)
-    local hrp = getHRP()
-    if not hrp then return false end
-    local hum = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
-    if not hum then return false end
-    
-    hum.WalkSpeed = 0
-    hrp.Anchored = true
-    task.wait(0.03)
-    hrp.CFrame = CFrame.new(pos + Vector3.new(0, 10, 0))
-    task.wait(0.03)
-    hrp.Anchored = false
-    hum.WalkSpeed = 16
-    return true
-end
-
--- =========================================================================
--- EQUIP LASSO
--- =========================================================================
 local function equipLasso()
-    pcall(function()
-        VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.One, false, game)
-        task.wait(0.02)
-        VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.One, false, game)
+    VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.One, false, game)
+    task.wait(0.05)
+    VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.One, false, game)
+    task.wait(0.3)
+end
+
+local function startAutoClick()
+    STATE.clicking = true
+    task.spawn(function()
+        local vp = workspace.CurrentCamera.ViewportSize
+        local cx, cy = vp.X / 2, vp.Y / 2
+        while STATE.clicking do
+            VirtualInputManager:SendMouseButtonEvent(cx, cy, 0, true, game, 1)
+            task.wait(0.01)
+            VirtualInputManager:SendMouseButtonEvent(cx, cy, 0, false, game, 1)
+            task.wait(0.08)
+        end
     end)
-    task.wait(0.2)
 end
 
--- =========================================================================
--- MINIGAME HOOK
--- =========================================================================
-local minigameActive = false
-local originalStartMinigame = nil
-
-local function setupMinigameHook()
-    if not MinigameModule or originalStartMinigame then return true end
-    
-    originalStartMinigame = MinigameModule.StartMinigame
-    MinigameModule.StartMinigame = function(...)
-        local minigame = originalStartMinigame(...)
-        minigameActive = true
-        
-        task.spawn(function()
-            while minigameActive and STATE.running do
-                if minigame.progress >= 100 then
-                    minigameActive = false
-                    break
-                end
-                pcall(function() minigame:OnClick() end)
-                task.wait(CONFIG.clickDelay)
-            end
-        end)
-        
-        return minigame
-    end
-    
-    return true
+local function stopAutoClick()
+    STATE.clicking = false
 end
 
--- =========================================================================
--- LASSO
--- =========================================================================
-local function launchLasso(pet)
-    if not throwLassoModule or not isAlive(pet) then return false end
-    local hrp = getHRP()
-    if not hrp then return false end
-    local petPos = getAnimalPos(pet)
-    if not petPos then return false end
-    
-    local direction = petPos - hrp.Position
-    pcall(function()
-        throwLassoModule.throwLasso(10000000, direction, player)
+local function startAimbot(pet)
+    local conn
+    conn = RunService.Heartbeat:Connect(function()
+        if not pet.Parent or not STATE.capturing then
+            conn:Disconnect()
+            return
+        end
+        local character = player.Character
+        if not character then return end
+        local hrp = character:FindFirstChild("HumanoidRootPart")
+        if not hrp then return end
+        local petPos = pet:GetPrimaryPartCFrame().Position
+        hrp.CFrame = CFrame.new(hrp.Position, Vector3.new(petPos.X, hrp.Position.Y, petPos.Z))
     end)
-    return true
 end
 
--- =========================================================================
--- CAPTURA
--- =========================================================================
-local function captureTarget(target)
+local function capturePet(pet)
     if STATE.capturing then return false end
     STATE.capturing = true
-    
-    log(string.format("🎯 ALVO: %s [%s]", target.name, target.rarity), "yellow")
-    
+    log(string.format("ALVO: %s [%s]", pet.Name, pet:GetAttribute("Rarity")))
     equipLasso()
-    
-    local pet = target.instance
-    if not isAlive(pet) then
-        log("❌ Animal sumiu!", "red")
+    local character = player.Character
+    if not character then STATE.capturing = false return false end
+    local hrp = character:FindFirstChild("HumanoidRootPart")
+    if not hrp then STATE.capturing = false return false end
+    local petPos = pet:GetPrimaryPartCFrame().Position
+    local dist = (petPos - hrp.Position).Magnitude
+    if dist > 10 then
+        hrp.CFrame = CFrame.new(petPos + Vector3.new(0, 8, 0))
+        task.wait(0.2)
+    end
+    if not pet.Parent then
         STATE.capturing = false
         return false
     end
-    
-    local petPos = getAnimalPos(pet)
-    if petPos then
-        local hrp = getHRP()
-        if hrp then
-            local dist = (petPos - hrp.Position).Magnitude
-            if dist > 10 then
-                teleportTo(petPos - (petPos - hrp.Position).Unit * 7)
-                task.wait(0.1)
-            end
-        end
-    end
-    
-    if not isAlive(pet) then
-        log("❌ Animal sumiu após TP!", "red")
-        STATE.capturing = false
-        return false
-    end
-    
-    launchLasso(pet)
-    
-    -- Espera captura
+    startAimbot(pet)
+    startAutoClick()
+    task.wait(0.2)
     local startTime = tick()
-    while (tick() - startTime) < CONFIG.captureTimeout do
-        if not isAlive(pet) then
-            log("✅ CAPTURADO!", "green")
+    while (tick() - startTime) < 5 do
+        if not pet.Parent then
+            stopAutoClick()
             STATE.capturedCount = STATE.capturedCount + 1
+            log(string.format("CAPTURADO! Total: %d", STATE.capturedCount))
             STATE.capturing = false
             return true
         end
         task.wait(0.1)
     end
-    
-    log("⏱️ Timeout na captura", "orange")
+    stopAutoClick()
+    log("Timeout na captura")
     STATE.capturing = false
     return false
 end
 
--- =========================================================================
--- MAIN LOOP
--- =========================================================================
 local function mainLoop()
-    log("🚀 SERVER HOP FARM INICIADO!", "cyan")
-    log("🎯 Alvos: Mythical, Secret", "cyan")
-    
-    if not setupMinigameHook() then
-        log("⚠️ MinigameModule não encontrado! Auto-click pode falhar.", "yellow")
-    end
-    
-    equipLasso()
-    
+    log("SERVER HOP FARM INICIADO!")
+    log("Alvos: Mythical, Secret, Exclusive")
     while STATE.running do
-        local targets = scanTargets()
-        
-        if #targets > 0 then
-            STATE.foundTarget = true
-            log(string.format("🔍 Encontrado %d alvo(s)!", #targets), "green")
-            
-            for _, target in ipairs(targets) do
-                if captureTarget(target) then
-                    task.wait(2)
-                end
-            end
-            
-            log(string.format("📊 Total capturado: %d", STATE.capturedCount), "cyan")
-            log(string.format("⏳ Aguardando %ds antes de trocar servidor...", CONFIG.serverHopDelay), "yellow")
-            task.wait(CONFIG.serverHopDelay)
-            
+        task.wait(1)
+        local targetPet = GetPetByRarity()
+        if not targetPet then
+            log("Nenhum alvo encontrado. Trocando servidor em 1s...")
+            task.wait(1)
             serverHop()
             break
-        else
-            if not STATE.foundTarget then
-                log("🔍 Nenhum Mítico/Secreto encontrado. Trocando servidor...", "yellow")
-                task.wait(2)
-                serverHop()
-                break
-            end
         end
-        
-        task.wait(1)
-    end
-end
-
--- =========================================================================
--- INIT
--- =========================================================================
-log("=" .. string.rep("=", 50), "white")
-log("  SERVER HOP AUTO FARM - Mythical & Secret Only", "cyan")
-log("=" .. string.rep("=", 50), "white")
-
-task.wait(2)
-mainLoop() end
-    
-    log("⏱️ Timeout na captura", "orange")
-    STATE.capturing = false
-    return false
-end
-
--- =========================================================================
--- MAIN LOOP
--- =========================================================================
-local function mainLoop()
-    log("🚀 SERVER HOP FARM INICIADO!", "cyan")
-    log("🎯 Alvos: Mythical, Secret", "cyan")
-    
-    if not setupMinigameHook() then
-        log("⚠️ MinigameModule não encontrado! Auto-click pode falhar.", "yellow")
-    end
-    
-    equipLasso()
-    
-    while STATE.running do
-        local targets = scanTargets()
-        
-        if #targets > 0 then
-            STATE.foundTarget = true
-            log(string.format("🔍 Encontrado %d alvo(s)!", #targets), "green")
-            
-            for _, target in ipairs(targets) do
-                if captureTarget(target) then
-                    task.wait(2)
-                end
-            end
-            
-            log(string.format("📊 Total capturado: %d", STATE.capturedCount), "cyan")
-            log(string.format("⏳ Aguardando %ds antes de trocar servidor...", CONFIG.serverHopDelay), "yellow")
-            task.wait(CONFIG.serverHopDelay)
-            
+        if capturePet(targetPet) then
+            log("Trocando servidor em 1s...")
+            task.wait(1)
             serverHop()
             break
-        else
-            if not STATE.foundTarget then
-                log("🔍 Nenhum Mítico/Secreto encontrado. Trocando servidor...", "yellow")
-                task.wait(2)
-                serverHop()
-                break
-            end
         end
-        
-        task.wait(1)
     end
 end
 
--- =========================================================================
--- INIT
--- =========================================================================
-log("=" .. string.rep("=", 50), "white")
-log("  SERVER HOP AUTO FARM - Mythical & Secret Only", "cyan")
-log("=" .. string.rep("=", 50), "white")
+local Window = ImGui:CreateWindow({
+    Title = "Server Hop Farm",
+    Size = UDim2.new(0, 300, 0, 200),
+    Position = UDim2.new(0.5, 0, 0, 50)
+})
+Window:Center()
 
-task.wait(2)
-mainLoop()
+local Tab = Window:CreateTab({ Name = "Farm" })
+Tab:Label({ Text = "Server Hop Auto Farm" })
+Tab:Label({ Text = "Mythical, Secret, Exclusive" })
+Tab:Separator()
+
+local statusLabel = Tab:Label({ Text = "Status: Parado" })
+local capturedLabel = Tab:Label({ Text = "Capturados: 0" })
+
+Tab:Separator()
+Tab:Button({
+    Text = "INICIAR",
+    Callback = function()
+        STATE.running = true
+        statusLabel.Text = "Status: RODANDO"
+        task.spawn(mainLoop)
+    end
+})
+
+Tab:Button({
+    Text = "PARAR",
+    Callback = function()
+        STATE.running = false
+        statusLabel.Text = "Status: PARADO"
+    end
+})
+
+task.spawn(function()
+    while true do
+        task.wait(0.5)
+        pcall(function()
+            capturedLabel.Text = "Capturados: " .. STATE.capturedCount
+            if STATE.capturing then
+                statusLabel.Text = "Status: CAPTURANDO..."
+            elseif STATE.running then
+                statusLabel.Text = "Status: PROCURANDO..."
+            end
+        end)
+    end
+end)
+
+log("GUI carregada! Clique em INICIAR para começar.")
