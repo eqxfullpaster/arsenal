@@ -1,8 +1,3 @@
---[[
-    SERVER HOP AUTO FARM - Mythical & Secret Only
-    Detecta Mítico/Secreto → Captura → Troca de servidor
-]]
-
 local Players = game:GetService("Players")
 local TeleportService = game:GetService("TeleportService")
 local HttpService = game:GetService("HttpService")
